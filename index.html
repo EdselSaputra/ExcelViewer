@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Penampil Data Excel</title>
+    <!-- Tailwind CSS CDN untuk styling yang mudah dan responsif -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Menghubungkan ke file CSS eksternal -->
+    <link rel="stylesheet" href="style.css">
+</head>
+<body class="bg-gray-100 min-h-screen flex items-center justify-center p-4">
+    <div class="bg-white p-6 sm:p-8 rounded-lg shadow-xl w-full max-w-4xl">
+        <h1 class="text-2xl sm:text-3xl font-bold text-center text-gray-800 mb-6">Tampilkan Data Excel ke Tabel</h1>
+
+        <div id="dropZone" class="mb-6">
+            <p class="text-gray-600 mb-2">Seret & Lepas File Excel di sini, atau</p>
+            <label for="excelFile" class="block text-blue-700 text-sm font-semibold cursor-pointer underline">
+                Pilih File Excel (.xls, .xlsx) dari perangkat Anda
+            </label>
+            <input type="file" id="excelFile" accept=".xls,.xlsx" class="hidden">
+        </div>
+
+        <!-- Kontrol utama: pencarian, pemilihan sheet, ekspor, kelola kolom -->
+        <div id="controls" class="mb-6 hidden flex flex-col sm:flex-row gap-4 items-end">
+            <div class="w-full sm:w-1/4">
+                <label for="sheetSelect" class="block text-gray-700 text-sm font-semibold mb-2">
+                    Pilih Sheet:
+                </label>
+                <select id="sheetSelect"
+                        class="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm bg-white">
+                    <!-- Opsi sheet akan dimuat di sini oleh JavaScript -->
+                </select>
+            </div>
+            <div class="w-full sm:w-1/4">
+                <label for="searchInput" class="block text-gray-700 text-sm font-semibold mb-2">
+                    Cari Data:
+                </label>
+                <input type="text" id="searchInput" placeholder="Ketik untuk mencari..."
+                       class="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm">
+            </div>
+            <div class="w-full sm:w-1/2 flex justify-end gap-2">
+                <button id="manageColumnsBtn"
+                        class="bg-gray-500 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-md shadow-md transition duration-150 ease-in-out">
+                    Kelola Kolom
+                </button>
+                <button id="exportCsvBtn"
+                        class="bg-green-500 hover:bg-green-600 text-white font-bold py-2 px-4 rounded-md shadow-md transition duration-150 ease-in-out">
+                    Ekspor ke CSV
+                </button>
+                <button id="exportPdfBtn"
+                        class="bg-red-700 hover:bg-red-800 text-white font-bold py-2 px-4 rounded-md shadow-md transition duration-150 ease-in-out">
+                    Ekspor ke PDF
+                </button>
+                <button id="resetAppBtn"
+                        class="bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-4 rounded-md shadow-md transition duration-150 ease-in-out">
+                    Reset
+                </button>
+            </div>
+        </div>
+
+        <!-- Pesan loading -->
+        <div id="loadingMessage" class="loading-message">
+            Memuat data... Mohon tunggu.
+        </div>
+
+        <!-- Kontainer untuk ringkasan statistik -->
+        <div id="dataSummary" class="hidden bg-blue-50 border border-blue-200 text-blue-800 p-4 rounded-md mb-6">
+            <h2 class="text-lg font-semibold mb-2">Ringkasan Data</h2>
+            <div id="summaryContent" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 text-sm">
+                <!-- Statistik akan dirender di sini -->
+            </div>
+        </div>
+
+        <!-- Kontainer untuk Visualisasi Data -->
+        <div id="chartControls" class="hidden bg-purple-50 border border-purple-200 text-purple-800 p-4 rounded-md mb-6 flex flex-col gap-4">
+            <h2 class="text-lg font-semibold mb-2">Visualisasi Data</h2>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div>
+                    <label for="chartType" class="block text-gray-700 text-sm font-semibold mb-2">Jenis Grafik:</label>
+                    <select id="chartType" class="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm">
+                        <option value="bar">Bar Chart</option>
+                        <option value="line">Line Chart</option>
+                    </select>
+                </div>
+                <div>
+                    <label for="xAxisSelect" class="block text-gray-700 text-sm font-semibold mb-2">Sumbu X (Label):</label>
+                    <select id="xAxisSelect" class="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm">
+                        <!-- Opsi akan dimuat oleh JS -->
+                    </select>
+                </div>
+                <div>
+                    <label for="yAxisSelect" class="block text-gray-700 text-sm font-semibold mb-2">Sumbu Y (Nilai):</label>
+                    <select id="yAxisSelect" class="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm">
+                        <!-- Opsi akan dimuat oleh JS -->
+                    </select>
+                </div>
+            </div>
+            <div class="mt-4">
+                <canvas id="myChart"></canvas>
+            </div>
+        </div>
+
+        <!-- Kontainer untuk menampilkan tabel -->
+        <div id="table-container" class="overflow-x-auto">
+            <!-- Tabel akan dirender di sini oleh JavaScript -->
+        </div>
+
+        <!-- Kontrol Paginasi -->
+        <div id="paginationControls" class="pagination-controls hidden">
+            <button id="prevPageBtn">Sebelumnya</button>
+            <span id="pageInfo"></span>
+            <button id="nextPageBtn">Berikutnya</button>
+            <select id="rowsPerPageSelect">
+                <option value="10">10 baris/halaman</option>
+                <option value="25">25 baris/halaman</option>
+                <option value="50">50 baris/halaman</option>
+                <option value="100">100 baris/halaman</option>
+            </select>
+        </div>
+
+        <!-- Modal untuk Kelola Kolom -->
+        <div id="columnManagerModal" class="column-manager-modal hidden">
+            <div class="column-manager-modal-content">
+                <h2 class="text-xl font-bold mb-4">Kelola Kolom</h2>
+                <div id="columnCheckboxes">
+                    <!-- Checkbox kolom akan dimuat di sini -->
+                </div>
+                <div class="flex justify-end gap-2 mt-4">
+                    <button id="applyColumnChangesBtn" class="bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded-md">
+                        Terapkan
+                    </button>
+                    <button id="cancelColumnChangesBtn" class="bg-gray-300 hover:bg-gray-400 text-gray-800 font-bold py-2 px-4 rounded-md">
+                        Batal
+                    </button>
+                </div>
+            </div>
+        </div>
+
+    <!-- SheetJS (xlsx) library untuk membaca file Excel -->
+    <script src="https://unpkg.com/xlsx/dist/xlsx.full.min.js"></script>
+    <!-- Chart.js library untuk visualisasi data -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- html2canvas library untuk mengambil screenshot elemen HTML -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <!-- jsPDF library untuk membuat PDF -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <!-- Menghubungkan ke file JavaScript eksternal -->
+    <script src="script.js"></script>
+</body>
+</html>
