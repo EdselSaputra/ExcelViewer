@@ -7,7 +7,8 @@ const loadingMessage = document.getElementById('loadingMessage');
 const controlsDiv = document.getElementById('controls');
 const dropZone = document.getElementById('dropZone');
 const exportCsvBtn = document.getElementById('exportCsvBtn');
-const exportPdfBtn = document.getElementById('exportPdfBtn'); // Tombol Ekspor PDF baru
+const exportPdfBtn = document.getElementById('exportPdfBtn');
+const copyToClipboardBtn = document.getElementById('copyToClipboardBtn'); // Tombol Salin Tabel baru
 const dataSummaryDiv = document.getElementById('dataSummary');
 const summaryContentDiv = document.getElementById('summaryContent');
 const manageColumnsBtn = document.getElementById('manageColumnsBtn');
@@ -32,6 +33,13 @@ const yAxisSelect = document.getElementById('yAxisSelect');
 const myChartCanvas = document.getElementById('myChart');
 let chartInstance = null; // Variabel untuk menyimpan instance Chart.js
 
+// Elemen Pengelompokan Data
+const groupingControlsDiv = document.getElementById('groupingControls');
+const groupBySelect = document.getElementById('groupBySelect');
+const aggregateBySelect = document.getElementById('aggregateBySelect');
+const groupedSummaryContentDiv = document.getElementById('groupedSummaryContent');
+
+
 // Variabel global untuk menyimpan data
 let currentWorkbook = null;
 let currentSheetData = []; // Data mentah dari sheet yang dipilih (tanpa header)
@@ -48,6 +56,15 @@ let currentPage = 1;
 let rowsPerPage = parseInt(rowsPerPageSelect.value);
 const defaultRowsPerPage = 10; // Nilai default untuk baris per halaman
 
+// Variabel untuk Undo/Redo
+let history = [];
+let historyPointer = -1;
+const MAX_HISTORY_SIZE = 20; // Batasan ukuran riwayat
+
+// Variabel untuk Drag & Drop Kolom
+let draggedTh = null;
+let dragOverTh = null;
+
 // --- Event Listeners ---
 excelFileInput.addEventListener('change', (e) => handleFile(e.target.files[0]));
 sheetSelect.addEventListener('change', (event) => {
@@ -61,7 +78,8 @@ searchInput.addEventListener('input', () => {
     currentPage = 1; // Reset halaman ke 1 setelah pencarian
 });
 exportCsvBtn.addEventListener('click', exportTableToCsv);
-exportPdfBtn.addEventListener('click', exportTableToPdf); // Event listener untuk tombol Ekspor PDF baru
+exportPdfBtn.addEventListener('click', exportTableToPdf);
+copyToClipboardBtn.addEventListener('click', copyTableToClipboard); // Event listener untuk tombol Salin Tabel
 manageColumnsBtn.addEventListener('click', openColumnManagerModal);
 applyColumnChangesBtn.addEventListener('click', applyColumnVisibilityChanges);
 cancelColumnChangesBtn.addEventListener('click', () => columnManagerModal.classList.add('hidden'));
@@ -92,6 +110,11 @@ rowsPerPageSelect.addEventListener('change', (event) => {
 chartTypeSelect.addEventListener('change', renderChart);
 xAxisSelect.addEventListener('change', renderChart);
 yAxisSelect.addEventListener('change', renderChart);
+
+// Event Listeners Pengelompokan Data
+groupBySelect.addEventListener('change', calculateGroupedSummary);
+aggregateBySelect.addEventListener('change', calculateGroupedSummary);
+
 
 // --- Drag and Drop Event Listeners ---
 dropZone.addEventListener('dragover', (e) => {
@@ -126,6 +149,7 @@ function handleFile(file) {
         paginationControls.classList.add('hidden');
         dataSummaryDiv.classList.add('hidden'); // Sembunyikan ringkasan data
         chartControlsDiv.classList.add('hidden'); // Sembunyikan kontrol chart
+        groupingControlsDiv.classList.add('hidden'); // Sembunyikan kontrol pengelompokan
         return;
     }
 
@@ -135,6 +159,7 @@ function handleFile(file) {
     paginationControls.classList.add('hidden');
     dataSummaryDiv.classList.add('hidden'); // Sembunyikan ringkasan data
     chartControlsDiv.classList.add('hidden'); // Sembunyikan kontrol chart
+    groupingControlsDiv.classList.add('hidden'); // Sembunyikan kontrol pengelompokan
 
     const reader = new FileReader();
 
@@ -159,6 +184,7 @@ function handleFile(file) {
             paginationControls.classList.remove('hidden');
             dataSummaryDiv.classList.remove('hidden'); // Tampilkan ringkasan data
             chartControlsDiv.classList.remove('hidden'); // Tampilkan kontrol chart
+            groupingControlsDiv.classList.remove('hidden'); // Tampilkan kontrol pengelompokan
         } catch (error) {
             loadingMessage.style.display = 'none';
             console.error('Error membaca atau memparsing file Excel:', error);
@@ -167,6 +193,7 @@ function handleFile(file) {
             paginationControls.classList.add('hidden');
             dataSummaryDiv.classList.add('hidden'); // Sembunyikan ringkasan data
             chartControlsDiv.classList.add('hidden'); // Sembunyikan kontrol chart
+            groupingControlsDiv.classList.add('hidden'); // Sembunyikan kontrol pengelompokan
         }
     };
 
@@ -178,6 +205,7 @@ function handleFile(file) {
         paginationControls.classList.add('hidden');
         dataSummaryDiv.classList.add('hidden'); // Sembunyikan ringkasan data
         chartControlsDiv.classList.add('hidden'); // Sembunyikan kontrol chart
+        groupingControlsDiv.classList.add('hidden'); // Sembunyikan kontrol pengelompokan
     };
 
     reader.readAsArrayBuffer(file);
@@ -214,6 +242,7 @@ function loadSheetData(sheetName) {
         filteredData = [];
         dataSummaryDiv.classList.add('hidden'); // Sembunyikan ringkasan data jika kosong
         chartControlsDiv.classList.add('hidden'); // Sembunyikan kontrol chart jika kosong
+        groupingControlsDiv.classList.add('hidden'); // Sembunyikan kontrol pengelompokan jika kosong
         return;
     }
 
@@ -249,8 +278,10 @@ function loadSheetData(sheetName) {
     currentPage = 1; // Pastikan halaman direset saat data sheet baru dimuat
 
     updateChartControls(); // Perbarui dropdown chart
+    populateGroupingControls(); // Perbarui dropdown pengelompokan
     renderChart(); // Render chart awal
     calculateStatistics(filteredData, currentHeaders); // Hitung statistik setelah data dimuat
+    calculateGroupedSummary(); // Hitung ringkasan pengelompokan awal
 }
 
 /**
@@ -325,21 +356,31 @@ function renderTable(dataToDisplay, headers) {
 
     // Membuat header tabel
     const headerRow = document.createElement('tr');
-    headers.forEach((headerText, index) => {
-        // Hanya render kolom yang terlihat (dari panel kelola kolom)
-        if (!visibleColumns.includes(headerText)) {
-            return;
-        }
+    // Urutkan header berdasarkan visibleColumns
+    const orderedHeaders = visibleColumns.filter(header => headers.includes(header));
+
+    orderedHeaders.forEach((headerText, index) => {
+        const originalIndex = headers.indexOf(headerText); // Indeks asli di currentHeaders
 
         const th = document.createElement('th');
         th.textContent = headerText;
         th.classList.add('py-3', 'px-4', 'border-b', 'border-gray-200', 'bg-gray-50', 'text-left', 'text-xs', 'font-semibold', 'text-gray-700', 'uppercase', 'tracking-wider', 'rounded-tl-lg', 'rounded-tr-lg');
-        th.setAttribute('data-column-index', index);
+        th.setAttribute('data-column-index', originalIndex); // Gunakan indeks asli untuk sort/filter
+        th.setAttribute('draggable', 'true'); // Membuat kolom bisa diseret
+        th.classList.add('relative'); // Untuk posisi ikon filter/sort
+
+        // Tambahkan kelas sticky untuk kolom pertama yang terlihat
+        if (index === 0) {
+            th.classList.add('sticky', 'left-0', 'z-10');
+            th.style.backgroundColor = '#f8fafc'; // Pastikan warna latar belakang sticky
+            th.style.boxShadow = '2px 0 5px rgba(0,0,0,0.1)'; // Shadow untuk efek sticky
+        }
+
 
         // Ikon Sort
         const sortIcon = document.createElement('span');
         sortIcon.classList.add('sort-icon');
-        if (index === sortColumnIndex) {
+        if (originalIndex === sortColumnIndex) {
             sortIcon.classList.add('active');
             sortIcon.textContent = sortDirection === 'asc' ? '▲' : '▼';
         } else {
@@ -347,24 +388,31 @@ function renderTable(dataToDisplay, headers) {
         }
         th.appendChild(sortIcon);
         th.addEventListener('click', (e) => {
-            // Hanya sort jika klik bukan pada ikon filter
             if (!e.target.classList.contains('filter-icon')) {
-                handleSort(index);
+                handleSort(originalIndex); // Sort berdasarkan indeks asli
             }
         });
 
         // Ikon Filter
         const filterIcon = document.createElement('span');
         filterIcon.classList.add('filter-icon');
-        filterIcon.textContent = '▼'; // Simbol umum untuk filter
+        filterIcon.textContent = '▼';
         if (columnFilters[headerText] && Object.keys(columnFilters[headerText]).length > 0) {
-            filterIcon.classList.add('active'); // Tanda jika filter aktif
+            filterIcon.classList.add('active');
         }
         filterIcon.addEventListener('click', (e) => {
-            e.stopPropagation(); // Mencegah event click bubbling ke TH (sort)
-            toggleFilterModal(th, headerText, index);
+            e.stopPropagation();
+            toggleFilterModal(th, headerText, originalIndex); // Filter berdasarkan indeks asli
         });
         th.appendChild(filterIcon);
+
+        // Event listener Drag & Drop
+        th.addEventListener('dragstart', handleColumnReorderStart);
+        th.addEventListener('dragover', handleColumnReorderOver);
+        th.addEventListener('dragleave', handleColumnReorderLeave);
+        th.addEventListener('drop', handleColumnReorderDrop);
+        th.addEventListener('dragend', handleColumnReorderEnd);
+
 
         headerRow.appendChild(th);
     });
@@ -374,26 +422,31 @@ function renderTable(dataToDisplay, headers) {
     // Membuat baris data untuk halaman saat ini
     dataForCurrentPage.forEach((rowData, rowIndex) => {
         const dataRow = document.createElement('tr');
-        rowData.forEach((cellData, colIndex) => {
-            // Hanya render kolom yang terlihat (dari panel kelola kolom)
-            if (!visibleColumns.includes(currentHeaders[colIndex])) {
-                return;
-            }
+        orderedHeaders.forEach((headerText, colIdxInOrderedHeaders) => {
+            const originalIndex = headers.indexOf(headerText); // Indeks asli di currentHeaders
+            const cellData = rowData[originalIndex];
 
             const td = document.createElement('td');
             td.textContent = cellData;
             td.classList.add('py-3', 'px-4', 'border-b', 'border-gray-200');
             td.setAttribute('data-row-index', rowIndex + startIndex); // Indeks baris asli
-            td.setAttribute('data-col-index', colIndex); // Indeks kolom asli
+            td.setAttribute('data-col-index', originalIndex); // Indeks kolom asli
+
+            // Tambahkan kelas sticky untuk kolom pertama yang terlihat
+            if (colIdxInOrderedHeaders === 0) {
+                td.classList.add('sticky', 'left-0', 'z-10');
+                td.style.backgroundColor = (rowIndex + startIndex) % 2 === 0 ? '#ffffff' : '#f7fafc'; // Sesuaikan warna latar belakang baris genap/ganjil
+                td.style.boxShadow = '2px 0 5px rgba(0,0,0,0.05)'; // Shadow untuk efek sticky
+            }
 
             // Validasi Data & Penyorotan
-            if (!isValidData(cellData, columnDataTypes[currentHeaders[colIndex]])) {
+            if (!isValidData(cellData, columnDataTypes[currentHeaders[originalIndex]])) {
                 td.classList.add('invalid-data');
             }
 
             // Mode Edit Sederhana
             td.contentEditable = "true"; // Membuat sel dapat diedit
-            td.addEventListener('blur', (e) => handleCellEdit(e, rowIndex + startIndex, colIndex));
+            td.addEventListener('blur', (e) => handleCellEdit(e, rowIndex + startIndex, originalIndex));
             td.addEventListener('keydown', (e) => {
                 if (e.key === 'Enter') {
                     e.preventDefault(); // Mencegah newline di sel
@@ -447,6 +500,9 @@ function isValidData(value, type) {
 function handleCellEdit(event, originalRowIndex, colIndex) {
     const newValue = event.target.textContent;
 
+    // Simpan status sebelum perubahan untuk Undo
+    saveHistory();
+
     // Temukan baris yang diedit di filteredData
     const actualRow = filteredData[originalRowIndex];
     if (actualRow) {
@@ -472,6 +528,7 @@ function handleCellEdit(event, originalRowIndex, colIndex) {
         if (columnDataTypes[currentHeaders[colIndex]] === 'number') {
             calculateStatistics(filteredData, currentHeaders);
             renderChart();
+            calculateGroupedSummary(); // Perbarui ringkasan pengelompokan
         }
     }
 }
@@ -682,6 +739,7 @@ function applyAllFilters() {
     currentPage = 1; // Reset halaman ke 1 setelah filter/sort
     renderTable(filteredData, currentHeaders);
     calculateStatistics(filteredData, currentHeaders); // Perbarui statistik
+    calculateGroupedSummary(); // Perbarui ringkasan pengelompokan
     renderChart(); // Perbarui chart
 }
 
@@ -1129,7 +1187,198 @@ function resetAll() {
         paginationControls.classList.add('hidden');
         dataSummaryDiv.classList.add('hidden');
         chartControlsDiv.classList.add('hidden');
+        groupingControlsDiv.classList.add('hidden'); // Sembunyikan kontrol pengelompokan
         loadingMessage.style.display = 'none';
         displayCustomMessage('Aplikasi telah direset ke kondisi awal.', 'info');
     }
+}
+
+/**
+ * Menyalin data tabel yang difilter dan diurutkan ke papan klip.
+ */
+function copyTableToClipboard() {
+    if (filteredData.length === 0 || currentHeaders.length === 0) {
+        displayCustomMessage('Tidak ada data untuk disalin.', 'error');
+        return;
+    }
+
+    // Hanya salin kolom yang terlihat
+    const copyHeaders = currentHeaders.filter(header => visibleColumns.includes(header));
+    const copyColIndices = copyHeaders.map(header => currentHeaders.indexOf(header));
+
+    let clipboardContent = copyHeaders.join('\t') + '\n'; // Header dipisahkan tab
+
+    filteredData.forEach(row => {
+        const rowData = copyColIndices.map(colIndex => row[colIndex]);
+        clipboardContent += rowData.join('\t') + '\n'; // Data dipisahkan tab
+    });
+
+    // Menggunakan execCommand karena navigator.clipboard.writeText mungkin tidak berfungsi di iframe
+    const textArea = document.createElement('textarea');
+    textArea.value = clipboardContent;
+    textArea.style.position = 'fixed'; // Agar tidak mengganggu layout
+    textArea.style.left = '-9999px';
+    document.body.appendChild(textArea);
+    textArea.focus();
+    textArea.select();
+
+    try {
+        const successful = document.execCommand('copy');
+        const msg = successful ? 'Data tabel berhasil disalin ke papan klip!' : 'Gagal menyalin data tabel.';
+        displayCustomMessage(msg, successful ? 'info' : 'error');
+    } catch (err) {
+        console.error('Gagal menyalin:', err);
+        displayCustomMessage('Gagal menyalin data tabel.', 'error');
+    } finally {
+        document.body.removeChild(textArea);
+    }
+}
+
+/**
+ * Mempopulasi dropdown untuk kontrol pengelompokan data.
+ */
+function populateGroupingControls() {
+    groupBySelect.innerHTML = '';
+    aggregateBySelect.innerHTML = '';
+
+    const emptyOption = document.createElement('option');
+    emptyOption.value = '';
+    emptyOption.textContent = 'Pilih Kolom...';
+    groupBySelect.appendChild(emptyOption.cloneNode(true));
+    aggregateBySelect.appendChild(emptyOption.cloneNode(true));
+
+    currentHeaders.forEach(header => {
+        // Hanya tampilkan kolom yang terlihat di dropdown pengelompokan
+        if (!visibleColumns.includes(header)) {
+            return;
+        }
+
+        const optionGroup = document.createElement('option');
+        optionGroup.value = header;
+        optionGroup.textContent = header;
+        groupBySelect.appendChild(optionGroup);
+
+        // Hanya tambahkan kolom numerik ke dropdown agregasi
+        if (columnDataTypes[header] === 'number') {
+            const optionAggregate = document.createElement('option');
+            optionAggregate.value = header;
+            optionAggregate.textContent = header;
+            aggregateBySelect.appendChild(optionAggregate);
+        }
+    });
+}
+
+/**
+ * Menghitung dan menampilkan ringkasan data yang dikelompokkan.
+ */
+function calculateGroupedSummary() {
+    groupedSummaryContentDiv.innerHTML = '';
+
+    const groupByHeader = groupBySelect.value;
+    const aggregateByHeader = aggregateBySelect.value;
+
+    if (!groupByHeader || !aggregateByHeader || filteredData.length === 0) {
+        groupedSummaryContentDiv.innerHTML = '<p class="text-gray-600">Pilih kolom untuk pengelompokan dan agregasi untuk melihat ringkasan.</p>';
+        return;
+    }
+
+    const groupByColIndex = currentHeaders.indexOf(groupByHeader);
+    const aggregateByColIndex = currentHeaders.indexOf(aggregateByHeader);
+
+    if (groupByColIndex === -1 || aggregateByColIndex === -1) {
+        return; // Kolom tidak ditemukan
+    }
+
+    const groupedResults = {}; // { 'Kategori A': { sum: X, count: Y }, ... }
+
+    filteredData.forEach(row => {
+        const groupKey = String(row[groupByColIndex]).trim();
+        const value = parseFloat(row[aggregateByColIndex]);
+
+        if (!isNaN(value)) {
+            if (!groupedResults[groupKey]) {
+                groupedResults[groupKey] = { sum: 0, count: 0 };
+            }
+            groupedResults[groupKey].sum += value;
+            groupedResults[groupKey].count += 1;
+        }
+    });
+
+    const formatNumber = (num) => num.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+
+    for (const key in groupedResults) {
+        const result = groupedResults[key];
+        const avg = result.count > 0 ? result.sum / result.count : 0;
+
+        const groupSummaryCard = document.createElement('div');
+        groupSummaryCard.classList.add('bg-white', 'p-3', 'rounded-md', 'shadow-sm', 'border', 'border-yellow-100');
+        groupSummaryCard.innerHTML = `
+            <h3 class="font-semibold text-yellow-700 mb-1">${groupByHeader}: ${key === '' ? '(Kosong)' : key}</h3>
+            <p><strong>Jumlah Data:</strong> ${result.count}</p>
+            <p><strong>Total ${aggregateByHeader}:</strong> ${formatNumber(result.sum)}</p>
+            <p><strong>Rata-rata ${aggregateByHeader}:</strong> ${formatNumber(avg)}</p>
+        `;
+        groupedSummaryContentDiv.appendChild(groupSummaryCard);
+    }
+
+    if (Object.keys(groupedResults).length === 0) {
+        groupedSummaryContentDiv.innerHTML = '<p class="text-gray-600">Tidak ada data yang cocok untuk pengelompokan ini.</p>';
+    }
+}
+
+// --- Drag and Drop Kolom ---
+function handleColumnReorderStart(e) {
+    draggedTh = e.target;
+    e.dataTransfer.effectAllowed = 'move';
+    // Gunakan setTimeout untuk menghindari bug di beberapa browser
+    setTimeout(() => {
+        draggedTh.classList.add('opacity-50');
+    }, 0);
+}
+
+function handleColumnReorderOver(e) {
+    e.preventDefault(); // Diperlukan untuk memungkinkan drop
+    if (e.target.tagName === 'TH' && e.target !== draggedTh) {
+        if (dragOverTh) {
+            dragOverTh.classList.remove('border-blue-400');
+        }
+        dragOverTh = e.target;
+        dragOverTh.classList.add('border-blue-400'); // Indikator visual
+    }
+}
+
+function handleColumnReorderLeave(e) {
+    if (dragOverTh) {
+        dragOverTh.classList.remove('border-blue-400');
+        dragOverTh = null;
+    }
+}
+
+function handleColumnReorderDrop(e) {
+    e.preventDefault();
+    if (e.target.tagName === 'TH' && e.target !== draggedTh) {
+        const draggedHeader = draggedTh.textContent.trim();
+        const targetHeader = e.target.textContent.trim();
+
+        const oldIndex = visibleColumns.indexOf(draggedHeader);
+        const newIndex = visibleColumns.indexOf(targetHeader);
+
+        if (oldIndex > -1 && newIndex > -1) {
+            // Pindahkan elemen di array visibleColumns
+            const [removed] = visibleColumns.splice(oldIndex, 1);
+            visibleColumns.splice(newIndex, 0, removed);
+            
+            localStorage.setItem('visibleColumns', JSON.stringify(visibleColumns)); // Simpan perubahan
+            applyAllFilters(); // Render ulang tabel dengan urutan baru
+        }
+    }
+}
+
+function handleColumnReorderEnd(e) {
+    draggedTh.classList.remove('opacity-50');
+    if (dragOverTh) {
+        dragOverTh.classList.remove('border-blue-400');
+    }
+    draggedTh = null;
+    dragOverTh = null;
 }
