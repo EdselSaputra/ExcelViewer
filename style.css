@@ -127,10 +127,6 @@ tr:hover {
     width: 200px;
     top: 100%; /* Di bawah header */
     left: 0;
-    display: none;
-}
-.filter-modal.active {
-    display: block;
 }
 .filter-modal label {
     display: block;
